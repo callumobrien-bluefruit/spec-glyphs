@@ -1,0 +1,6 @@
+[requires]
+libxml2/2.9.9@bincrafters/stable
+glib/2.58.3@bincrafters/stable
+
+[generators]
+cmake
