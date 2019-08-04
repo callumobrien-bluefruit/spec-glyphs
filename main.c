@@ -5,26 +5,26 @@
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Weverything"
 #include "glib-2.0/gmodule.h"
-#include "unicode/utf8.h"
 #include "libxml/parser.h"
 #include "libxml/xmlmemory.h"
+#include "unicode/utf8.h"
 #pragma clang diagnostic pop
 
 #define FONT_COUNT 3
 
-static void die(const char *msg) __attribute__ ((noreturn));
+static void die(const char *msg) __attribute__((noreturn));
 static GHashTable *get_font_usages(const char *screens_path);
 static GHashTable **determine_characters(GHashTable *font_usages,
-                                     const char *translations_path);
+                                         const char *translations_path);
 static bool read_screen(GHashTable *usages, xmlNode *screen);
 static bool read_translations(GHashTable *font_usages,
-					          xmlDoc *doc,
-					          const xmlNode *text,
-					          GHashTable *characters[FONT_COUNT]);
+                              xmlDoc *doc,
+                              const xmlNode *text,
+                              GHashTable *characters[FONT_COUNT]);
 static bool read_translation(GHashTable *font_usages,
-					         const xmlChar *text_id,
-					         const xmlChar *trans_text,
-					         GHashTable *characters[FONT_COUNT]);
+                             const xmlChar *text_id,
+                             const xmlChar *trans_text,
+                             GHashTable *characters[FONT_COUNT]);
 static void print_glyph(gpointer key, gpointer value, gpointer user_data);
 
 int main(int argc, char *argv[])
@@ -92,7 +92,7 @@ GHashTable *get_font_usages(const char *screens_path)
 
 	xmlFreeDoc(doc);
 	return usages;
-} 
+}
 
 /// Processes a single screen XML node, updating `usages` to account for
 /// `screen`'s text items. Returns `true` on success, `false` on failure.
@@ -140,7 +140,7 @@ bool read_screen(GHashTable *usages, xmlNode *screen)
 /// tables with an entry for each used glyph.  Returns `NULL` on
 /// failure.
 GHashTable **determine_characters(GHashTable *font_usages,
-                              const char *translations_path)
+                                  const char *translations_path)
 {
 	xmlDoc *doc;
 	xmlNode *root, *text;
@@ -148,7 +148,8 @@ GHashTable **determine_characters(GHashTable *font_usages,
 
 	characters = calloc(FONT_COUNT, sizeof(GHashTable *));
 	for (unsigned i = 0; i < FONT_COUNT; ++i)
-		characters[i] = g_hash_table_new_full(g_int_hash, g_int_equal, free, NULL);
+		characters[i]
+		    = g_hash_table_new_full(g_int_hash, g_int_equal, free, NULL);
 
 	doc = xmlParseFile(translations_path);
 	if (!doc)
@@ -186,7 +187,7 @@ bool read_translations(GHashTable *font_usages,
 
 	for (trans = text->xmlChildrenNode; trans; trans = trans->next) {
 		if (xmlStrcmp(trans->name, (const xmlChar *)"source") != 0
-			&& xmlStrcmp(trans->name, (const xmlChar *)"target") != 0)
+		    && xmlStrcmp(trans->name, (const xmlChar *)"target") != 0)
 			continue;
 
 		trans_text = xmlNodeListGetString(doc, trans->xmlChildrenNode, 1);
@@ -202,13 +203,13 @@ bool read_translations(GHashTable *font_usages,
 	return true;
 }
 
-/// Processes a single translation, adding its characters to `characters`
-/// for any fonts its parent translation unit is used in. Returns `true`
-/// on success, `false` on failure.
+/// Processes a single translation, adding its characters to `characters` for
+/// any fonts its parent translation unit is used in. Returns `true` on success,
+/// `false` on failure.
 bool read_translation(GHashTable *font_usages,
-					  const xmlChar *text_id,
-					  const xmlChar *trans_text,
-					  GHashTable *characters[FONT_COUNT])
+                      const xmlChar *text_id,
+                      const xmlChar *trans_text,
+                      GHashTable *characters[FONT_COUNT])
 {
 	long i, c, *p;
 	const xmlChar *s;
