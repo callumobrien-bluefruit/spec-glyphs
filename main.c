@@ -122,10 +122,13 @@ bool read_screen(GHashTable *usages, xmlNode *screen)
 	unsigned font;
 	bool *usage;
 
-	xmlChar *screenName = xmlGetProp(screen, (const xmlChar *)"name");
-	xmlFree(screenName);
-
 	for (text = screen->xmlChildrenNode; text; text = text->next) {
+		if (xmlStrcmp(text->name, (const xmlChar *)"variable_region") == 0) {
+			if (!read_screen(usages, text))
+				return false;
+			continue;
+		}
+
 		if (xmlStrcmp(text->name, (const xmlChar *)"text") != 0)
 			continue;
 
@@ -154,9 +157,9 @@ bool read_screen(GHashTable *usages, xmlNode *screen)
 	return true;
 }
 
-/// Determines, from `font_usages` and translations XML, which characters are
-/// used in each font, returning an array of `FONT_COUNT` hash tables with an
-/// entry for each used glyph. Returns `NULL` on failure.
+/// Determines, from `font_usages` and translations XML, which characters
+/// are used in each font, returning an array of `FONT_COUNT` hash tables
+/// with an entry for each used glyph. Returns `NULL` on failure.
 GHashTable **determine_chars(GHashTable *font_usages,
                              const char *translations_path)
 {
