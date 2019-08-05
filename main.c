@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Weverything"
@@ -11,6 +12,13 @@
 #pragma clang diagnostic pop
 
 #define FONT_COUNT 3
+#define MAX_PATH_LEN 128
+#define MAX_SPEC_LEN 512
+
+struct font {
+	char path[MAX_PATH_LEN];
+	unsigned size, width, height, x, y;
+};
 
 static void die(const char *msg) __attribute__((noreturn));
 static GHashTable *get_font_usages(const char *screens_path);
@@ -24,15 +32,24 @@ static bool read_translations(GHashTable *font_usages,
 static bool read_translation(bool *font_usage,
                              const xmlChar *trans_text,
                              GHashTable *chars[FONT_COUNT]);
-static void print_glyph(gpointer key, gpointer value, gpointer user_data);
+static struct font *read_fonts(const char *phys_attrib_xml);
+static int extract_font(const xmlNode *fonts, struct font *out);
+static bool extract_unsigned_prop(const xmlNode *node,
+                                  const char *prop_name,
+                                  unsigned *value_out);
+static bool write_specs(GHashTable **chars,
+                        const struct font *fonts,
+                        const char *out_dir);
 
 int main(int argc, char *argv[])
 {
 	unsigned i;
 	GHashTable *font_usages, **chars;
+	struct font *fonts;
 
-	if (argc < 3)
-		die("usage: spec-glyphs SCREENS_XML TRANSLATIONS_XML");
+	if (argc < 5)
+		die("usage: spec-glyphs SCREENS_XML TRANSLATIONS_XML PHYS_ATTRIB_XML "
+		    "OUT_DIR");
 
 	font_usages = get_font_usages(argv[1]);
 	if (!font_usages)
@@ -42,12 +59,14 @@ int main(int argc, char *argv[])
 	if (!chars)
 		die("failed to process translations XML");
 
-	for (i = 0; i < FONT_COUNT; ++i) {
-		printf("FONT%d:", i);
-		g_hash_table_foreach(chars[i], print_glyph, NULL);
-		printf("\n");
-	}
+	fonts = read_fonts(argv[3]);
+	if (!fonts)
+		die("failed to read font options from physical attributes XML");
 
+	if (!write_specs(chars, fonts, argv[4]))
+		die("failed to write glyphs specs");
+
+	free(fonts);
 	for (i = 0; i < FONT_COUNT; ++i)
 		g_hash_table_destroy(chars[i]);
 	g_hash_table_destroy(font_usages);
@@ -243,9 +262,124 @@ bool read_translation(bool *font_usage,
 	return true;
 }
 
-void print_glyph(gpointer key, gpointer value, gpointer user_data)
+/// Read font options from `phys_attrib_path`, returning them in a
+/// heap-allocated array on success, `NULL` on failure.
+struct font *read_fonts(const char *phys_attrib_path)
 {
-	(void)value;
-	(void)user_data;
-	printf(" %ld", *(long *)key);
+	xmlDoc *doc;
+	xmlNode *root, *xml_fonts, *xml_font;
+	struct font font, *fonts;
+	int index;
+
+	doc = xmlParseFile(phys_attrib_path);
+	if (!doc)
+		return NULL;
+	root = xmlDocGetRootElement(doc);
+	if (!root)
+		return NULL;
+
+	fonts = calloc(FONT_COUNT, sizeof(struct font));
+	for (xml_fonts = root->xmlChildrenNode; xml_fonts;
+	     xml_fonts = xml_fonts->next) {
+		if (xmlStrcmp(xml_fonts->name, (const xmlChar *)"Fonts") != 0)
+			continue;
+
+		for (xml_font = xml_fonts->xmlChildrenNode; xml_font;
+		     xml_font = xml_font->next) {
+			if (xmlStrcmp(xml_font->name, (const xmlChar *)"Font") != 0)
+				continue;
+
+			index = extract_font(xml_font, &font);
+			if (index < 0 || index >= FONT_COUNT) {
+				free(fonts);
+				return NULL;
+			}
+
+			fonts[index] = font;
+		}
+	}
+
+	return fonts;
+}
+
+/// Extracts font options from a XML Font node, writing them to `*out` and
+/// returning its font index. Returns `-1` on error.
+int extract_font(const xmlNode *font, struct font *out)
+{
+	char *s;
+	int n, index;
+
+	if (!extract_unsigned_prop(font, "Size", &out->size)
+	    || !extract_unsigned_prop(font, "Width", &out->width)
+	    || !extract_unsigned_prop(font, "Height", &out->height)
+	    || !extract_unsigned_prop(font, "StartX", &out->x)
+	    || !extract_unsigned_prop(font, "StartY", &out->y))
+		return -1;
+
+	// Can't use `extract_unsigned_prop` here because of the "FONT" prefix
+	s = (char *)xmlGetProp(font, (const xmlChar *)"Name");
+	if (!s)
+		return -1;
+	n = sscanf(s, "FONT%d", &index);
+	xmlFree(s);
+	if (n != 1)
+		return -1;
+
+	s = (char *)xmlGetProp(font, (const xmlChar *)"TrueTypeLib");
+	if (!s)
+		return -1;
+	strncpy(out->path, s, MAX_PATH_LEN);
+	xmlFree(s);
+
+	return index;
+}
+
+/// Extracts the value of the property called `prop_name` from `node`,
+/// converting it to an integer and writing it to `value_out`. Returns
+/// `true` on success, `false` on error.
+bool extract_unsigned_prop(const xmlNode *node,
+                           const char *prop_name,
+                           unsigned *value_out)
+{
+	int n;
+	char *s;
+
+	s = (char *)xmlGetProp(node, (const xmlChar *)prop_name);
+	if (!s)
+		return false;
+	n = sscanf(s, "%u", value_out);
+
+	xmlFree(s);
+	return n == 1;
+}
+
+bool write_specs(GHashTable **chars,
+                 const struct font *fonts,
+                 const char *out_dir)
+{
+	GHashTableIter iter;
+	unsigned i, *char_id;
+	char buffer[MAX_SPEC_LEN];
+	int n;
+
+	for (i = 0; i < FONT_COUNT; ++i) {
+		for (g_hash_table_iter_init(&iter, chars[i]);
+		     g_hash_table_iter_next(&iter, (void **)&char_id, NULL);) {
+			n = snprintf(buffer,
+			             MAX_SPEC_LEN,
+			             "%d\t%s\t%d\t%d\t%d\t%d\t%d\n",
+			             *char_id,
+			             fonts[i].path,
+			             fonts[i].size,
+			             fonts[i].width,
+			             fonts[i].height,
+			             fonts[i].x,
+			             fonts[i].y);
+			if (n >= MAX_SPEC_LEN)
+				return NULL;
+			printf("%s", buffer);
+		}
+	}
+
+	return true;
 }
