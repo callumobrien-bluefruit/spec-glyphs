@@ -14,22 +14,22 @@
 
 static void die(const char *msg) __attribute__((noreturn));
 static GHashTable *get_font_usages(const char *screens_path);
-static GHashTable **determine_characters(GHashTable *font_usages,
-                                         const char *translations_path);
+static GHashTable **determine_chars(GHashTable *font_usages,
+                                    const char *translations_path);
 static bool read_screen(GHashTable *usages, xmlNode *screen);
 static bool read_translations(GHashTable *font_usages,
                               xmlDoc *doc,
                               const xmlNode *text,
-                              GHashTable *characters[FONT_COUNT]);
-static bool read_translation(GHashTable *font_usages,
-                             const xmlChar *text_id,
+                              GHashTable *chars[FONT_COUNT]);
+static bool read_translation(bool *font_usage,
                              const xmlChar *trans_text,
-                             GHashTable *characters[FONT_COUNT]);
+                             GHashTable *chars[FONT_COUNT]);
 static void print_glyph(gpointer key, gpointer value, gpointer user_data);
 
 int main(int argc, char *argv[])
 {
-	GHashTable *font_usages, **characters;
+	unsigned i;
+	GHashTable *font_usages, **chars;
 
 	if (argc < 3)
 		die("usage: spec-glyphs SCREENS_XML TRANSLATIONS_XML");
@@ -38,18 +38,18 @@ int main(int argc, char *argv[])
 	if (!font_usages)
 		die("failed to process screens XML");
 
-	characters = determine_characters(font_usages, argv[2]);
-	if (!characters)
+	chars = determine_chars(font_usages, argv[2]);
+	if (!chars)
 		die("failed to process translations XML");
 
-	for (unsigned i = 0; i < FONT_COUNT; ++i) {
+	for (i = 0; i < FONT_COUNT; ++i) {
 		printf("FONT%d:", i);
-		g_hash_table_foreach(characters[i], print_glyph, NULL);
+		g_hash_table_foreach(chars[i], print_glyph, NULL);
 		printf("\n");
 	}
 
-	for (unsigned i = 0; i < FONT_COUNT; ++i)
-		g_hash_table_destroy(characters[i]);
+	for (i = 0; i < FONT_COUNT; ++i)
+		g_hash_table_destroy(chars[i]);
 	g_hash_table_destroy(font_usages);
 	return 0;
 }
@@ -57,7 +57,7 @@ int main(int argc, char *argv[])
 /// Prints `msg` to `stderr` then exits with status 1
 void die(const char *msg)
 {
-	fprintf(stderr, "spec-characters: %s\n", msg);
+	fprintf(stderr, "spec-glyphs: %s\n", msg);
 	exit(1);
 }
 
@@ -135,21 +135,19 @@ bool read_screen(GHashTable *usages, xmlNode *screen)
 	return true;
 }
 
-/// Determines, from `font_usages` and translations XML, which characters
-/// are used in each font, returning an array of `FONT_COUNT` hash
-/// tables with an entry for each used glyph.  Returns `NULL` on
-/// failure.
-GHashTable **determine_characters(GHashTable *font_usages,
-                                  const char *translations_path)
+/// Determines, from `font_usages` and translations XML, which characters are
+/// used in each font, returning an array of `FONT_COUNT` hash tables with an
+/// entry for each used glyph. Returns `NULL` on failure.
+GHashTable **determine_chars(GHashTable *font_usages,
+                             const char *translations_path)
 {
 	xmlDoc *doc;
 	xmlNode *root, *text;
-	GHashTable **characters;
+	GHashTable **chars;
 
-	characters = calloc(FONT_COUNT, sizeof(GHashTable *));
+	chars = calloc(FONT_COUNT, sizeof(GHashTable *));
 	for (unsigned i = 0; i < FONT_COUNT; ++i)
-		characters[i]
-		    = g_hash_table_new_full(g_int_hash, g_int_equal, free, NULL);
+		chars[i] = g_hash_table_new_full(g_int_hash, g_int_equal, free, NULL);
 
 	doc = xmlParseFile(translations_path);
 	if (!doc)
@@ -162,24 +160,25 @@ GHashTable **determine_characters(GHashTable *font_usages,
 		if (xmlStrcmp(text->name, (const xmlChar *)"trans-unit") != 0)
 			continue;
 
-		if (!read_translations(font_usages, doc, text, characters))
+		if (!read_translations(font_usages, doc, text, chars))
 			return NULL;
 	}
 
 	xmlFreeDoc(doc);
-	return characters;
+	return chars;
 }
 
 /// Processes a single translation unit, adding characters used in its
-/// translations to `characters` for any fonts it is used in. Returns `true`
-/// on success, `false` on failure.
+/// translations to `chars` for any fonts it is used in. Returns `true` on
+/// success, `false` on failure.
 bool read_translations(GHashTable *font_usages,
                        xmlDoc *doc,
                        const xmlNode *text,
-                       GHashTable *characters[FONT_COUNT])
+                       GHashTable **chars)
 {
 	xmlNode *trans;
 	xmlChar *text_id, *trans_text;
+	bool *font_usage;
 
 	text_id = xmlGetProp(text, (const xmlChar *)"name");
 	if (!text_id)
@@ -191,9 +190,22 @@ bool read_translations(GHashTable *font_usages,
 			continue;
 
 		trans_text = xmlNodeListGetString(doc, trans->xmlChildrenNode, 1);
-		if (!trans_text)
-			return false;
-		if (!read_translation(font_usages, text_id, trans_text, characters))
+		if (!trans_text) {
+			fprintf(stderr,
+			        "spec-glyphs: warning: empty translation for %s\n",
+			        text_id);
+			continue;
+		}
+
+		font_usage = (bool *)g_hash_table_lookup(font_usages, text_id);
+		if (!font_usage) {
+			fprintf(stderr,
+			        "spec-glyphs: warning: unused translation %s\n",
+			        text_id);
+			return true;
+		}
+
+		if (!read_translation(font_usage, trans_text, chars))
 			return false;
 
 		xmlFree(trans_text);
@@ -203,32 +215,27 @@ bool read_translations(GHashTable *font_usages,
 	return true;
 }
 
-/// Processes a single translation, adding its characters to `characters` for
-/// any fonts its parent translation unit is used in. Returns `true` on success,
+/// Processes a single translation, adding its characters to `chars` for any
+/// fonts its parent translation unit is used in. Returns `true` on success,
 /// `false` on failure.
-bool read_translation(GHashTable *font_usages,
-                      const xmlChar *text_id,
+bool read_translation(bool *font_usage,
                       const xmlChar *trans_text,
-                      GHashTable *characters[FONT_COUNT])
+                      GHashTable **chars)
 {
-	long i, c, *p;
 	const xmlChar *s;
-	bool *font_usage;
-
-	font_usage = (bool *)g_hash_table_lookup(font_usages, text_id);
-	if (!font_usage)
-		return false;
+	int i, c;
+	unsigned j, *p;
 
 	for (i = 0, s = trans_text; *s != '\0'; s += i, i = 0) {
 		U8_NEXT(s, i, -1, c)
 		if (c < 0)
 			return false;
 
-		for (unsigned j = 0; j < FONT_COUNT; ++j) {
+		for (j = 0; j < FONT_COUNT; ++j) {
 			if (font_usage[j]) {
-				p = malloc(sizeof(long));
-				*p = c;
-				g_hash_table_add(characters[j], p);
+				p = malloc(sizeof(unsigned));
+				*p = (unsigned)c;
+				g_hash_table_add(chars[j], p);
 			}
 		}
 	}
