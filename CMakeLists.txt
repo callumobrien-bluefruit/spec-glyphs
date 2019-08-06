@@ -12,3 +12,7 @@ if(MSVC)
 else()
 	target_compile_options(spec-glyphs PRIVATE -std=c99 -pedantic -Weverything)
 endif()
+
+if(WIN32)
+	add_compile_definitions(WINDOWS)
+endif()

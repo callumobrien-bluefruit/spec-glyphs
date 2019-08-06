@@ -14,6 +14,11 @@
 #define FONT_COUNT 3
 #define MAX_PATH_LEN 128
 #define MAX_SPEC_LEN 512
+#ifndef WINDOWS
+#define PATH_SEP "/"
+#else
+#define PATH_SEP "\\"
+#endif
 
 struct font {
 	char path[MAX_PATH_LEN];
@@ -40,6 +45,10 @@ static bool extract_unsigned_prop(const xmlNode *node,
 static bool write_specs(GHashTable **chars,
                         const struct font *fonts,
                         const char *out_dir);
+static void build_path(char *out,
+                       unsigned n,
+                       const char *dir,
+                       const char *name);
 
 int main(int argc, char *argv[])
 {
@@ -356,19 +365,24 @@ bool extract_unsigned_prop(const xmlNode *node,
 	return n == 1;
 }
 
+/// Writes a file in `out_dir` for each needed glyph detailing rendering
+/// parameters as tab-seperated values. The filename is the MD5 hash of the
+/// content and the file is only written if it does not already exist. Returns
+/// `true` on success, `false` on error.
 bool write_specs(GHashTable **chars,
                  const struct font *fonts,
                  const char *out_dir)
 {
 	GHashTableIter iter;
 	unsigned i, *char_id;
-	char buffer[MAX_SPEC_LEN];
+	char path[MAX_PATH_LEN], spec[MAX_SPEC_LEN], *md5;
+	FILE *fp;
 	int n;
 
 	for (i = 0; i < FONT_COUNT; ++i) {
 		for (g_hash_table_iter_init(&iter, chars[i]);
 		     g_hash_table_iter_next(&iter, (void **)&char_id, NULL);) {
-			n = snprintf(buffer,
+			n = snprintf(spec,
 			             MAX_SPEC_LEN,
 			             "%d\t%s\t%d\t%d\t%d\t%d\t%d\n",
 			             *char_id,
@@ -380,9 +394,31 @@ bool write_specs(GHashTable **chars,
 			             fonts[i].y);
 			if (n >= MAX_SPEC_LEN)
 				return NULL;
-			printf("%s", buffer);
+
+			md5 = g_compute_checksum_for_string(G_CHECKSUM_MD5, spec, -1);
+			build_path(path, MAX_PATH_LEN, out_dir, md5);
+			g_free(md5);
+
+			if ((fp = fopen(path, "r")) != NULL) {
+				// File exists
+				fclose(fp);
+				continue;
+			}
+
+			fp = fopen(path, "w");
+			if (fp == NULL || fputs(spec, fp) == EOF)
+				return false;
+			fclose(fp);
 		}
 	}
 
 	return true;
+}
+
+/// Builds a filesystem path with directory part `dir` and filename `name`
+void build_path(char *out, unsigned n, const char *dir, const char *name)
+{
+	strncpy(out, dir, n);
+	strncat(out, PATH_SEP, n);
+	strncat(out, name, n);
 }
