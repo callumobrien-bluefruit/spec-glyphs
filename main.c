@@ -222,17 +222,21 @@ bool read_translations(GHashTable *font_usages,
 
 		trans_text = xmlNodeListGetString(doc, trans->xmlChildrenNode, 1);
 		if (!trans_text) {
+#ifndef NDEBUG
 			fprintf(stderr,
 			        "spec-glyphs: warning: empty translation for %s\n",
 			        text_id);
+#endif
 			continue;
 		}
 
 		font_usage = (bool *)g_hash_table_lookup(font_usages, text_id);
 		if (!font_usage) {
+#ifndef NDEBUG
 			fprintf(stderr,
 			        "spec-glyphs: warning: unused translation %s\n",
 			        text_id);
+#endif
 			return true;
 		}
 
